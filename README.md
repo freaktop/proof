@@ -158,4 +158,22 @@ Response:
 - **Cryptographic integrity**: SHA-256 hash of file bytes
 - **Immutable storage**: Files cannot be overwritten
 - **Write-once records**: Firestore proofs are immutable
-- **Real-time verification**: Hash recomputed on each verification request
+- **Real-time verification**: Hash recomputed on each verification request 
+
+# Synopsis
+
+
+# Description
+
+# Example
+
+# Install:
+`npm install `
+
+# Test:
+`npm test`
+
+#License:
+
+# proof
+>>>>>>> 4d20667536c78c8f042308dea0a441a0d979958d
