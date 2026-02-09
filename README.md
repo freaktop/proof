@@ -1,36 +1,161 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PROOF v0.1 — Truth-validated, tamper-evident MVP
 
-## Getting Started
+Mobile-first web app that creates tamper-evident video proofs. Records video, computes SHA-256 hash, stores immutably, and provides public verification of byte-level integrity.
 
-First, run the development server:
+## Features
 
+- Record 5–10 second video on mobile
+- Client-side SHA-256 hash (WebCrypto)
+- Server-side SHA-256 verification before sealing
+- Firestore proof records are write-once
+- Public verification endpoint (no auth)
+- Minimal device fingerprint signal stored alongside proof
+
+## Tech Stack
+
+- Next.js (App Router) + Tailwind CSS
+- Firebase Auth + Storage (client SDK)
+- Firebase Admin SDK (server routes)
+- Firestore
+
+## Local Setup
+
+### 1. Install Dependencies
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 2. Configure Firebase
+1. Create a Firebase project.
+2. Enable Firebase Auth (Google provider recommended).
+3. Create a Firestore database.
+4. Create a Storage bucket.
+5. Generate a service account key (JSON) and copy values to env vars.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### 3. Configure Environment Variables
+Create `.env.local` in the project root:
+```env
+# Firebase Web (client)
+NEXT_PUBLIC_FIREBASE_API_KEY=your-api-key
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=your-project.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=your-project-id
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=your-project.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=your-sender-id
+NEXT_PUBLIC_FIREBASE_APP_ID=your-app-id
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Firebase Admin (server)
+FIREBASE_PROJECT_ID=your-project-id
+FIREBASE_CLIENT_EMAIL=service-account@your-project.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+```
 
-## Learn More
+### 4. Firestore Security Rules (write-once)
+```txt
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /proofs/{proofId} {
+      allow read: if true;
+      allow create: if false;
+      allow update, delete: if false;
 
-To learn more about Next.js, take a look at the following resources:
+      match /signals/{signalId} {
+        allow read: if true;
+        allow create: if false;
+        allow update, delete: if false;
+      }
+    }
+  }
+}
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+> The app writes proofs via the Admin SDK, which bypasses rules. Client writes are intentionally blocked.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+### 5. Storage Rules (no overwrite)
+```txt
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /proofs/{uid}/{fileName} {
+      allow read: if false;
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && resource == null;
+    }
+  }
+}
+```
 
-## Deploy on Vercel
+### 6. Run Development Server
+```bash
+npm run dev
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Open `http://localhost:3000`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## API Contract
+
+### POST `/api/proofs/seal`
+Body:
+```json
+{
+  "proofId": "uuid",
+  "storagePath": "proofs/{uid}/{proofId}.webm",
+  "clientHash": "sha256",
+  "signals": {
+    "device_fingerprint": "sha256",
+    "client_time_iso": "2026-01-22T00:00:00.000Z"
+  }
+}
+```
+Headers:
+```
+Authorization: Bearer <firebaseIdToken>
+```
+Response:
+```json
+{ "proofId": "uuid" }
+```
+
+### GET `/api/proofs/:id/verify`
+Response:
+```json
+{
+  "proofId": "uuid",
+  "valid": true,
+  "createdAt": "2026-01-22T00:00:00.000Z",
+  "mediaHash": "sha256",
+  "currentHash": "sha256"
+}
+```
+
+## Routes
+
+- `/` Marketing
+- `/app` Authenticated proof creation
+- `/verify/[id]` Public verification
+
+## Tamper Detection Behavior
+
+### What happens if someone attempts to tamper with a proof:
+
+**a) File overwrite attempt:**
+- **Blocked by Storage rules**: Firebase Storage rules prevent overwriting existing files (`resource == null`)
+- Files are write-once by design
+- Cannot replace an existing proof video
+
+**b) File byte alteration:**
+- **Detected via hash mismatch**: Any change to file bytes alters the SHA-256 hash
+- Verification shows "Integrity check failed"
+- Current hash ≠ sealed hash, proving tampering occurred
+
+**c) Hash replay with different bytes:**
+- **Detected during verification**: Server recomputes hash from stored file bytes on every request
+- Cannot spoof hash verification since actual file bytes are used
+- Hash comparison ensures byte-level integrity
+
+### Security Guarantees:
+- **Cryptographic integrity**: SHA-256 hash of file bytes
+- **Immutable storage**: Files cannot be overwritten
+- **Write-once records**: Firestore proofs are immutable
+- **Real-time verification**: Hash recomputed on each verification request
